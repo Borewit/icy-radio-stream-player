@@ -338,7 +338,7 @@ export default function IcyStreamPlayer() {
   // ------- RENDER -------
   return (
     <div className="container">
-      <h1>ICY Stream Player</h1>
+      <h1>ICY Radio Stream Player</h1>
       <div id="visualizer" className="w-full h-64 mb-4 md:block"/>
       <audio key={audioKey} ref={audioRef} className="hidden" crossOrigin="anonymous"/>
 
