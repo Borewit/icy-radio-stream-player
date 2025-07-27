@@ -4,6 +4,7 @@ import AudioMotionAnalyzer from "audiomotion-analyzer";
 import "./IcyStreamPlayer.css";
 import {FLACDecoderWebWorker} from "@wasm-audio-decoders/flac";
 import {parseWebStream} from "music-metadata";
+import Footer from "./Footer";
 
 // ----- STREAM LIST -----
 const streams = [
@@ -437,6 +438,9 @@ export default function IcyStreamPlayer() {
 
       {/* STATION LIST */}
       <StreamList streams={streams} onSelect={startStream} playingUrl={playingUrl}/>
+
+      {/* Footer */}
+      <Footer/>
     </div>
   );
 }
