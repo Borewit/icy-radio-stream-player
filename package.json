@@ -37,7 +37,7 @@
     ]
   },
   "devDependencies": {
-    "@music-metadata/icy": "^0.2.0",
+    "@music-metadata/icy": "^0.2.1",
     "@wasm-audio-decoders/flac": "^0.2.8",
     "audiomotion-analyzer": "^4.5.1",
     "music-metadata": "^11.7.3"
