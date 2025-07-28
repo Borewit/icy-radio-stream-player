@@ -15,9 +15,11 @@ const streams = [
     {title: "Radio Paradise - Beyond [FLAC]", url: "https://stream.radioparadise.com/beyond-flacm"},
     {title: "Radio Paradise - 2050 [FLAC]", url: "https://stream.radioparadise.com/radio2050-flacm"},
     {title: "Radio Paradise - Serenity [AAC]", url: "https://stream.radioparadise.com/serenity"},
+    {title: "RJR", url: "https://stream.rjrradio.fr/rjr-dab.flac"},
+    {title: "Haarlem Shuffle", url: "https://stream.tbmp.nl:8000/haarlemshuffle.flac"},
+    {title: "Mother Earth Radio [FLAC 24-bit/96kHz]", url: "https://motherearth.streamserver24.com/listen/motherearth/motherearth.flac-lo"},
     {title: "Radio Mast [MP3/128kb]", url: "https://audio-edge-kef8b.ams.s.radiomast.io/ref-128k-mp3-stereo"},
-    {title: "RJR", url: "https://stream.rjrradio.fr/rjr-dab.flac"}
-    // { title: "Mother Earth Radio [FLAC 24-bit/96kHz]", url: "https://motherearth.streamserver24.com/listen/motherearth/motherearth.flac-lo" },
+    {title: "Iowa Statewide Interoperability Communications System (ISICS)", url: "https://dsmrad.io/stream/isics-all"},
   ]
 ;
 
@@ -30,7 +32,7 @@ function formatBitrate(bitrate) {
 }
 
 /* ---- SUBCOMPONENT: ICY Metadata Table ---- */
-function IcyRadioMetadataTable({ tags }) {
+function IcyRadioMetadataTable({tags}) {
   // Define keys to prioritize and their order
   const priorityKeys = ["name", "description", "genre", "url"];
 
@@ -67,7 +69,7 @@ function IcyRadioMetadataTable({ tags }) {
               <td>{key}</td>
               <td>
                 {key === "url" ? (
-                  <a href={value} target="_blank" rel="noopener noreferrer" >
+                  <a href={value} target="_blank" rel="noopener noreferrer">
                     {value}
                   </a>
                 ) : (
@@ -114,13 +116,13 @@ function StreamList({streams, onSelect, playingUrl}) {
 export default function IcyStreamPlayer() {
   // --- Refs ---
 
-  const audioRef =   useRef(null);
+  const audioRef = useRef(null);
 
   const analyzerRef = useRef({
     analyzer: null,
     audioCtx: null,
     gainNode: null,
-    splitterNode: null,
+    splitterNode: null
   });
 
   /**
@@ -132,7 +134,7 @@ export default function IcyStreamPlayer() {
     streamReader: null,
     audioStream: null,
     bufferSources: [], // Track *all* PCM source nodes
-    pumpTask: null,
+    pumpTask: null
   });
 
   // --- State ---
@@ -147,7 +149,7 @@ export default function IcyStreamPlayer() {
   // 🎧 Setup audio context & analyser ONCE
   useEffect(() => {
 
-    if(analyzerRef.current.audioCtx) {
+    if (analyzerRef.current.audioCtx) {
       return;
     }
 
@@ -168,17 +170,21 @@ export default function IcyStreamPlayer() {
     const audioMotion = new AudioMotionAnalyzer(visEl, {
       audioCtx: audioCtx,
       connectSpeakers: false,
-      gradient: "steelblue",
-      channelLayout: "dual-combined",
-      fillAlpha: 0.1,
-      frequencyScale: "bark",
+      gradient: "prism",
+      channelLayout: "single",
+      fftSize: 8192,
+      fillAlpha: 0.5,
+      frequencyScale: "log",
       lineWidth: 2,
-      height: 200,
-      smoothing: 0.4,
+      height: 250,
+      smoothing: 0.1,
       mode: 10,
       peakLine: false,
       peakHoldTime: 0,
-      maxDecibels: -20
+      maxDecibels: -20,
+      showScaleX: true,
+      showScaleY: true,
+      showPeaks: false
     });
     audioMotion.connectInput(splitterNode);
 
@@ -188,7 +194,7 @@ export default function IcyStreamPlayer() {
       gainNode,
       splitterNode
     };
-  });
+  }, );
 
   // 🎧 Control volume
   useEffect(() => {
@@ -210,10 +216,16 @@ export default function IcyStreamPlayer() {
 
     for (const sourceNode of currentStream.bufferSources) {
       console.log('Stop source node');
-      sourceNode.stop();
-      sourceNode.disconnect();
+      try {
+        if (sourceNode.stop) {
+          sourceNode.stop();
+        }
+      } finally {
+        sourceNode.disconnect();
+        sourceNode.onended = null; // cleanup memory reference
+      }
     }
-    currentStream.sourceNode = [];
+    currentStream.bufferSources = [];
 
     if (currentStream.streamReader) {
       console.log('Cancel audio stream reader...');
@@ -317,13 +329,6 @@ export default function IcyStreamPlayer() {
     }
   }, [currentStreamIndex, startStreamByIndex]);
 
-  // When user clicks generic Play (if nothing playing) start first stream:
-  const handleGenericPlay = useCallback(() => {
-    if (currentStreamIndex === null) {
-      startStreamByIndex(0);
-    }
-  }, [currentStreamIndex, startStreamByIndex]);
-
   // ==== MAIN LOGIC EFFECT ====
   useEffect(() => {
     if (!playingUrl) return;
@@ -334,68 +339,52 @@ export default function IcyStreamPlayer() {
       setFormatMetadata(null);
 
       const currentStream = currentStreamRef.current;
-      // Increase stream id, used to eliminate race conditions
       if (!currentStream.cancel) {
-        throw new Error('Can not play a new radio-stream when the previous radio-stream is still playing');
+        throw new Error('Cannot play new stream while previous still playing');
       }
+
       currentStream.cancel = false;
       console.log(`Initialize new stream ${playingUrl}`);
 
-      // Dual fetch
       const abortController = new AbortController();
       currentStream.abortController = abortController;
 
-      // Fetch for playback/icy/stream
-      const streamPromise = fetch(playingUrl, {
+      console.log('Fetch audio-stream response...');
+      const icyAudioResponse = await fetch(playingUrl, {
         mode: 'cors',
-        headers: {'Icy-MetaData': '1'},
+        headers: { 'Icy-MetaData': '1' },
         signal: abortController.signal
       }).catch(() =>
-        fetch(playingUrl, {
-          mode: 'cors',
-          signal: abortController.signal
-        })
+        fetch(playingUrl, { mode: 'cors', signal: abortController.signal })
       );
-
-      // Fetch for metadata only (no headers)
-      const metaPromise = fetch(playingUrl, {mode: 'cors'});
-
-      // Await in parallel
-      let response, metaResponse;
-      try {
-        [response, metaResponse] = await Promise.all([streamPromise, metaPromise]);
-      } catch (err) {
-        if (err.name === "AbortError") {
-          // Fetch was aborted – do nothing
-          return;
-        } else {
-          console.error("Error fetching stream:", err);
-          return;
-        }
-      }
       if (currentStream.cancel) return;
 
-      // ------ Parse ICY headers ------
+      const metaResponse = await fetch(playingUrl, { mode: 'cors', signal: abortController.signal });
+      if (currentStream.cancel) return;
+
       const icyTags = new Map();
-      for (const [key, value] of response.headers.entries()) {
+      for (const [key, value] of icyAudioResponse.headers.entries()) {
         if (key.startsWith('icy-')) icyTags.set(key.substring(4), value);
       }
       setIcyTags(icyTags);
 
-      // ----- Parse & process the audio -----
-      const audioStream = parseIcyResponse(response, ({metadata, stats}) => {
+      const audioStream = parseIcyResponse(icyAudioResponse, ({ metadata, stats }) => {
         if (metadata?.StreamTitle) setIcyTitle(metadata.StreamTitle);
         setStats(stats);
       });
       currentStream.audioStream = audioStream;
 
-      // Get content-type for decoding mode
-      const contentType = response.headers.get('content-type') || "";
+      const contentType = icyAudioResponse.headers.get('content-type') || "";
       const isFlac = contentType.includes("ogg") || contentType.includes("flac");
 
+      const ctx = analyzerRef.current.audioCtx;
+
+      if (ctx.state === "suspended") {
+        console.debug('AudioContext suspended, resuming...');
+        await ctx.resume();
+      }
+
       if (isFlac) {
-        console.log('Start playing FLAC stream...');
-        // ------- FLAC Decoding Pipeline ---------
         if (!globalFlacDecoder) {
           globalFlacDecoder = new FLACDecoderWebWorker();
           await globalFlacDecoder.ready;
@@ -404,48 +393,46 @@ export default function IcyStreamPlayer() {
 
         const reader = audioStream.getReader();
         currentStream.streamReader = reader;
-        analyzerRef.current.gainNode.gain.value = volume;
 
-        const ctx = analyzerRef.current.audioCtx;
+        let playbackTime = ctx.currentTime + 0.3;
 
-        let playbackTime = ctx.currentTime + 0.2;
-        const pump = async () =>  {
+        const pump = async () => {
           if (currentStream.cancel) return;
-          const {done, value} = await reader.read();
+          const { done, value } = await reader.read();
           if (done || currentStream.cancel) return;
           try {
-            try {
-              const pcmData = await globalFlacDecoder.decode(value);
-              if (currentStream.cancel) return;
-              if (
-                pcmData.channelData.length > 0 &&
-                pcmData.channelData[0].length > 0
-              ) {
-                const {sampleRate, channelData} = pcmData;
-                if (!ctx || ctx.state === 'closed') {
-                  console.warn('AudioContext is closed. Skipping buffer processing.');
-                  return;
-                }
-                const buffer = ctx.createBuffer(channelData.length, channelData[0].length, sampleRate);
-                for (let ch = 0; ch < channelData.length; ch++) {
-                  buffer.getChannelData(ch).set(channelData[ch]);
-                }
-                const source = ctx.createBufferSource();
-                source.onended = () => {
-                  // Remove this source from the bufferSources array once done
-                  const idx = currentStream.bufferSources.indexOf(source);
-                  if (idx !== -1) currentStream.bufferSources.splice(idx, 1);
-                };
-                currentStream.bufferSources.push(source);
-                currentStream.sourceNode = source;
-                source.buffer = buffer;
-                source.connect(analyzerRef.current.splitterNode);
-                source.start(playbackTime);
-                playbackTime += buffer.duration;
+            const pcmData = await globalFlacDecoder.decode(value);
+            if (currentStream.cancel) return;
+            if (
+              pcmData.channelData.length > 0 &&
+              pcmData.channelData[0].length > 0
+            ) {
+              const { sampleRate, channelData } = pcmData;
+              if (!ctx || ctx.state === 'closed') {
+                console.warn('AudioContext is closed. Skipping buffer processing.');
+                return;
               }
-            } catch (e) {
-              console.error("FLAC decoding/chunk error", e);
+              const buffer = ctx.createBuffer(channelData.length, channelData[0].length, sampleRate);
+              for (let ch = 0; ch < channelData.length; ch++) {
+                buffer.getChannelData(ch).set(channelData[ch]);
+              }
+              const source = ctx.createBufferSource();
+              source.onended = () => {
+                const idx = currentStream.bufferSources.indexOf(source);
+                if (idx !== -1) currentStream.bufferSources.splice(idx, 1);
+                source.onended = null; // cleanup memory reference
+              };
+              currentStream.bufferSources.push(source);
+              source.buffer = buffer;
+              source.connect(analyzerRef.current.splitterNode);
+
+              playbackTime = Math.max(playbackTime, ctx.currentTime + 0.2);
+
+              source.start(playbackTime);
+              playbackTime += buffer.duration;
             }
+          } catch (e) {
+            console.error("FLAC decoding/chunk error", e);
           } finally {
             if (!currentStream.cancel) {
               await pump();
@@ -454,32 +441,26 @@ export default function IcyStreamPlayer() {
             }
           }
         };
-        currentStream.pumpTask = pump(); // Start pump
+        currentStream.pumpTask = pump();
       } else {
-        // -------- NON-FLAC: HTML5 pipeline ----------
         const audio = audioRef.current;
         audio.src = playingUrl;
-        audio.volume = volume;
 
-        // Connect HTMLAudioElement to analyzer/gain/AudioContext
         const analyzer = analyzerRef.current;
         const sourceNode = analyzer.audioCtx.createMediaElementSource(audio);
-        currentStream.sourceNode = sourceNode;
-        const gainNode = analyzerRef.current.gainNode;
-        gainNode.gain.value = volume;
-        sourceNode.connect(analyzerRef.current.splitterNode);
+        currentStream.bufferSources.push(sourceNode);
+        sourceNode.connect(analyzer.splitterNode);
 
-        // Play!
         audio.play().catch(console.error);
       }
 
-      // ---- Parse metadata from metaResponse (in parallel, doesn't block) -----
       parseWebStream(metaResponse.body)
-        .then(({format}) => {
+        .then(({ format }) => {
           setFormatMetadata({
             container: format.container,
             codec: format.codec,
             sampleRate: format.sampleRate,
+            bitsPerSample: format.bitsPerSample,
             bitrate: format.bitrate
           });
         })
@@ -490,7 +471,7 @@ export default function IcyStreamPlayer() {
     return () => {
       return cancelCurrentStream();
     };
-  }, [playingUrl, volume, cancelCurrentStream]);
+  }, [playingUrl, cancelCurrentStream]);
 
   // Memoized stats calculation
   const bitrate = useMemo(() => {
@@ -525,34 +506,27 @@ export default function IcyStreamPlayer() {
   return (
     <div className="container">
       <h1>ICY Radio Stream Player</h1>
-      <div id="visualizer" className="w-full h-64 mb-4 md:block"/>
+      <div id="visualizer"/>
       <audio ref={audioRef} className="hidden" crossOrigin="anonymous"/>
 
       {/* Controls: Generic Play, Previous, Next */}
-      <div className="flex" style={{gap: '1rem', alignItems: 'center', marginBottom: '1rem'}}>
+      <div className="controls">
 
         <button
           onClick={playPrevious}
           disabled={currentStreamIndex === null}
-          className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50"
           aria-label="Play previous stream"
         >⏮
         </button>
 
         <button
           onClick={togglePlayStop}
-          className={`px-4 py-2 rounded ${
-            isPlaying ? "bg-red-600 text-white" : "bg-green-600 text-white"
-          }`}
           aria-label={isPlaying ? "Stop playback" : "Play first stream"}
-        >
-          {isPlaying ? "■" : "▶"}
-        </button>
+        >{isPlaying ? "■" : "▶"}</button>
 
         <button
           onClick={playNext}
           disabled={currentStreamIndex === null}
-          className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50"
           aria-label="Play next stream"
         >⏭
         </button>
@@ -571,6 +545,7 @@ export default function IcyStreamPlayer() {
           onChange={(e) => setVolume(Number(e.target.value))}
           className="mr-4"
         />
+        <div className="volume-value">{(volume * 100).toFixed(0)}</div>
       </div>
 
       {/* METADATA */}
@@ -606,14 +581,18 @@ export default function IcyStreamPlayer() {
                 <td>Codec</td>
                 <td>{formatMetadata.codec}</td>
               </tr>
-              <tr>
-                <td>Sample Rate</td>
-                <td>{formatMetadata.sampleRate} Hz</td>
-              </tr>
-              <tr>
-                <td>Bitrate</td>
-                <td>{formatBitrate(formatMetadata.bitrate)}</td>
-              </tr>
+              {formatMetadata.bitsPerSample && (
+                <tr>
+                  <td>Bits per sample</td>
+                  <td>{formatMetadata.bitsPerSample}</td>
+                </tr>
+              )}
+              {formatMetadata.bitrate && (
+                <tr>
+                  <td>Bitrate</td>
+                  <td>{formatBitrate(formatMetadata.bitrate)}</td>
+                </tr>
+              )}
               </tbody>
             </table>
           ) : (
