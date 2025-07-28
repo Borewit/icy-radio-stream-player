@@ -30,36 +30,61 @@ function formatBitrate(bitrate) {
 }
 
 /* ---- SUBCOMPONENT: ICY Metadata Table ---- */
-function IcyRadioMetadataTable({tags}) {
-  if (tags && tags.size > 0) {
-    return (
-      <div>
-        <h2>ICY Radio Metadata</h2>
+function IcyRadioMetadataTable({ tags }) {
+  // Define keys to prioritize and their order
+  const priorityKeys = ["name", "description", "genre", "url"];
+
+  // Prepare sorted entries: first priority keys (if present), then remaining keys
+  const sortedEntries = (() => {
+    if (!tags || tags.size === 0) return [];
+
+    // Filter out unwanted keys first
+    const filteredEntries = [...tags.entries()].filter(
+      ([key]) => !["metaint", "br"].includes(key)
+    );
+
+    // Extract priority entries in order, if present
+    const priorityEntries = [];
+    for (const pkey of priorityKeys) {
+      const foundIndex = filteredEntries.findIndex(([key]) => key === pkey);
+      if (foundIndex !== -1) {
+        priorityEntries.push(filteredEntries.splice(foundIndex, 1)[0]);
+      }
+    }
+
+    // Remaining entries stay in their original order (or you could sort alphabetically if you want)
+    return [...priorityEntries, ...filteredEntries];
+  })();
+
+  return (
+    <div>
+      <h2>ICY Radio Metadata</h2>
+      {tags && tags.size > 0 ? (
         <table className="info-table">
           <tbody>
-          {[...tags.entries()]
-            .filter(([key]) => !["metaint", "br"].includes(key))
-            .map(([key, value]) => (
-              <tr key={key}>
-                <td>{key}</td>
-                <td>
-                  {key === "url" ? (
-                    <a href={value} target="_blank" rel="noopener noreferrer">
-                      {value}
-                    </a>
-                  ) : (
-                    value
-                  )}
-                </td>
-              </tr>
-            ))}
+          {sortedEntries.map(([key, value]) => (
+            <tr key={key}>
+              <td>{key}</td>
+              <td>
+                {key === "url" ? (
+                  <a href={value} target="_blank" rel="noopener noreferrer" >
+                    {value}
+                  </a>
+                ) : (
+                  value
+                )}
+              </td>
+            </tr>
+          ))}
           </tbody>
         </table>
-      </div>
-    );
-  }
-  return <div>No ICY Radio Metadata available.</div>;
+      ) : (
+        <div>No ICY Radio Metadata available.</div>
+      )}
+    </div>
+  );
 }
+
 
 /* ---- SUBCOMPONENT: Stream List ---- */
 function StreamList({streams, onSelect, playingUrl}) {
@@ -102,16 +127,12 @@ export default function IcyStreamPlayer() {
    * Object use for the currently played radio stream
    */
   const currentStreamRef = useRef({
-    token: 0,
     cancel: true,
     abortController: null,
     streamReader: null,
     audioStream: null,
-    sourceNode: null,
+    bufferSources: [], // Track *all* PCM source nodes
     pumpTask: null,
-
-    // NEW: lock to sequence stream operations
-    lock: Promise.resolve(),
   });
 
   // --- State ---
@@ -187,28 +208,21 @@ export default function IcyStreamPlayer() {
 
     console.log('Cancel current radio stream...');
 
-    if (currentStream.sourceNode) {
+    for (const sourceNode of currentStream.bufferSources) {
       console.log('Stop source node');
-      try {
-        currentStream.sourceNode.stop();
-      } catch (e) {
-        console.warn('Error stopping sourceNode:', e);
-      }
-      currentStream.sourceNode.disconnect();
-      currentStream.sourceNode = null;
+      sourceNode.stop();
+      sourceNode.disconnect();
     }
+    currentStream.sourceNode = [];
 
     if (currentStream.streamReader) {
       console.log('Cancel audio stream reader...');
-      try {
-        // Will also cancel the stream it is reading from
-        await currentStream.streamReader.cancel();
-      } finally {
-        console.log('Release audio stream lock.');
-        currentStream.streamReader.releaseLock();
-        currentStream.streamReader = null;
-        console.log('Cancelled audio stream reader.');
-      }
+      // Will also cancel the stream it is reading from
+      const streamReader = currentStream.streamReader;
+      await streamReader.cancel();
+      streamReader.releaseLock();
+      currentStream.streamReader = null;
+      console.log('Cancelled audio stream reader.');
     }
 
     if (currentStream.abortController) {
@@ -249,14 +263,66 @@ export default function IcyStreamPlayer() {
   }, [cancelCurrentStream]);
 
   // ==== STREAM START LOGIC ====
-  const startStream = useCallback(    async (stream) => {
-      console.log('Start stream, cancelling previous...');
+
+  // Add current stream index to state (null means no stream playing)
+  const [currentStreamIndex, setCurrentStreamIndex] = useState(null);
+
+  // Helper to start stream by index in your streams list
+  const startStreamByIndex = useCallback(
+    async (index) => {
+      if (index < 0 || index >= streams.length) {
+        console.warn("StartStreamByIndex: index out of bounds", index);
+        return;
+      }
+      console.log('Start stream by index, cancelling previous...');
       await cancelCurrentStream();
-      console.log(`setPlayingUrl ${stream.url}`);
-      setPlayingUrl(stream.url);
+      setCurrentStreamIndex(index);
+      setPlayingUrl(streams[index].url);
     },
     [cancelCurrentStream]
   );
+
+  // Override startStream to accept either stream or index for backward compatibility
+  const startStream = useCallback(
+    (streamOrIndex) => {
+      if (typeof streamOrIndex === "number") {
+        return startStreamByIndex(streamOrIndex);
+      } else if (typeof streamOrIndex === "object" && streamOrIndex.url) {
+        const index = streams.findIndex((s) => s.url === streamOrIndex.url);
+        if (index !== -1) {
+          return startStreamByIndex(index);
+        }
+      }
+      console.warn("startStream: invalid argument", streamOrIndex);
+    },
+    [startStreamByIndex]
+  );
+
+  // Handlers for previous and next buttons
+  const playPrevious = useCallback(() => {
+    if (currentStreamIndex === null) {
+      startStreamByIndex(0);
+    } else {
+      const newIndex = currentStreamIndex === 0 ? streams.length - 1 : currentStreamIndex - 1;
+      startStreamByIndex(newIndex);
+    }
+  }, [currentStreamIndex, startStreamByIndex]);
+
+  const playNext = useCallback(() => {
+    if (currentStreamIndex === null) {
+      startStreamByIndex(0);
+    } else {
+      const newIndex = currentStreamIndex === streams.length - 1 ? 0 : currentStreamIndex + 1;
+      startStreamByIndex(newIndex);
+    }
+  }, [currentStreamIndex, startStreamByIndex]);
+
+  // When user clicks generic Play (if nothing playing) start first stream:
+  const handleGenericPlay = useCallback(() => {
+    if (currentStreamIndex === null) {
+      startStreamByIndex(0);
+    }
+  }, [currentStreamIndex, startStreamByIndex]);
 
   // ==== MAIN LOGIC EFFECT ====
   useEffect(() => {
@@ -269,12 +335,11 @@ export default function IcyStreamPlayer() {
 
       const currentStream = currentStreamRef.current;
       // Increase stream id, used to eliminate race conditions
-      const token = ++currentStream.token;
       if (!currentStream.cancel) {
         throw new Error('Can not play a new radio-stream when the previous radio-stream is still playing');
       }
       currentStream.cancel = false;
-      console.log(`Initialize new stream ${playingUrl} token=${token}`);
+      console.log(`Initialize new stream ${playingUrl}`);
 
       // Dual fetch
       const abortController = new AbortController();
@@ -346,13 +411,12 @@ export default function IcyStreamPlayer() {
         let playbackTime = ctx.currentTime + 0.2;
         const pump = async () =>  {
           if (currentStream.cancel) return;
-          console.log('pump...');
           const {done, value} = await reader.read();
-          if (done || currentStream.token !== token || currentStream.cancel) return;
+          if (done || currentStream.cancel) return;
           try {
             try {
               const pcmData = await globalFlacDecoder.decode(value);
-              if (currentStream.token !== token || currentStream.cancel) return;
+              if (currentStream.cancel) return;
               if (
                 pcmData.channelData.length > 0 &&
                 pcmData.channelData[0].length > 0
@@ -367,6 +431,12 @@ export default function IcyStreamPlayer() {
                   buffer.getChannelData(ch).set(channelData[ch]);
                 }
                 const source = ctx.createBufferSource();
+                source.onended = () => {
+                  // Remove this source from the bufferSources array once done
+                  const idx = currentStream.bufferSources.indexOf(source);
+                  if (idx !== -1) currentStream.bufferSources.splice(idx, 1);
+                };
+                currentStream.bufferSources.push(source);
                 currentStream.sourceNode = source;
                 source.buffer = buffer;
                 source.connect(analyzerRef.current.splitterNode);
@@ -377,7 +447,7 @@ export default function IcyStreamPlayer() {
               console.error("FLAC decoding/chunk error", e);
             }
           } finally {
-            if (currentStream.token === token && !currentStream.cancel) {
+            if (!currentStream.cancel) {
               await pump();
             } else {
               console.log('Pump exiting, stream ended');
@@ -435,6 +505,22 @@ export default function IcyStreamPlayer() {
     return ((stats.audioBytesRead * 8) / elapsedSec / 1000).toFixed(2);
   }, [stats]);
 
+  // For toggle, derive playing state from playingUrl (or add isPlaying state)
+  const isPlaying = Boolean(playingUrl);
+
+  // Toggle play/pause (start first or stop current)
+  const togglePlayStop = useCallback(async () => {
+    if (isPlaying) {
+      // Stop current stream
+      await cancelCurrentStream();
+    } else {
+      // Start playing first stream in list
+      if (streams.length > 0) {
+        await startStream(streams[0]);
+      }
+    }
+  }, [isPlaying, cancelCurrentStream, startStream]);
+
   // ------- RENDER -------
   return (
     <div className="container">
@@ -442,9 +528,37 @@ export default function IcyStreamPlayer() {
       <div id="visualizer" className="w-full h-64 mb-4 md:block"/>
       <audio ref={audioRef} className="hidden" crossOrigin="anonymous"/>
 
-      {/* VOLUME + STOP */}
-      <div className="flex items-center mb-2">
-        <label htmlFor="vol-slider" className="font-medium mr-2">
+      {/* Controls: Generic Play, Previous, Next */}
+      <div className="flex" style={{gap: '1rem', alignItems: 'center', marginBottom: '1rem'}}>
+
+        <button
+          onClick={playPrevious}
+          disabled={currentStreamIndex === null}
+          className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50"
+          aria-label="Play previous stream"
+        >⏮
+        </button>
+
+        <button
+          onClick={togglePlayStop}
+          className={`px-4 py-2 rounded ${
+            isPlaying ? "bg-red-600 text-white" : "bg-green-600 text-white"
+          }`}
+          aria-label={isPlaying ? "Stop playback" : "Play first stream"}
+        >
+          {isPlaying ? "■" : "▶"}
+        </button>
+
+        <button
+          onClick={playNext}
+          disabled={currentStreamIndex === null}
+          className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50"
+          aria-label="Play next stream"
+        >⏭
+        </button>
+
+        {/* Volume and stop controls */}
+        <label htmlFor="vol-slider" className="font-medium mr-2 ml-6">
           Volume
         </label>
         <input
@@ -457,21 +571,21 @@ export default function IcyStreamPlayer() {
           onChange={(e) => setVolume(Number(e.target.value))}
           className="mr-4"
         />
-        <button
-          onClick={cancelCurrentStream}
-          className="px-3 py-1 bg-red-600 text-white rounded"
-          disabled={!playingUrl}
-        >
-          Stop
-        </button>
       </div>
 
       {/* METADATA */}
-      <div className="panel">
-        <div className="panel display-mono">
-          <h2>ICY Metadata</h2>
-          <div>{icyTitle || "No StreamTitle yet"}</div>
-        </div>
+
+      <div className="panel display-mono">
+        <h2>ICY Stream Metadata</h2>
+
+        <table className="info-table">
+          <tbody>
+          <tr>
+            <td>Title</td>
+            <td>{icyTitle || "No StreamTitle yet"}</td>
+          </tr>
+          </tbody>
+        </table>
       </div>
       <div className="panel">
         <IcyRadioMetadataTable tags={icyTags}/>
