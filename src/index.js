@@ -4,7 +4,8 @@ import './index.css';
 import IcyStreamPlayer from './IcyStreamPlayer';
 import reportWebVitals from './reportWebVitals';
 
-localStorage.debug = 'music-metadata:icy*';
+//localStorage.debug = '*';
+localStorage.debug = 'music-metadata:*,icy-stream-player:*,-music-metadata:icy:*'
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
